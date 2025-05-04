@@ -27,7 +27,7 @@ def unused_tcp_port():
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-log = logging.getLogger("UAF Judge")
+log = logging.getLogger("UAF Capability Manager")
 
 parser=argparse.ArgumentParser()
 
