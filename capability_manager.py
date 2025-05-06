@@ -1,6 +1,7 @@
 from pwn import *
 import argparse
 import os
+import subprocess
 import threading
 import logging
 import time
@@ -40,6 +41,7 @@ parser.add_argument("-t","--time",dest="time",type=int,required=False,help="time
 parser.add_argument("--batch",dest="batch",type=int,required=False,help="batch",default=5)
 parser.add_argument("--cmp",dest="cmp",action="store_true",help="Enable cmp shift")
 parser.add_argument("--workdir",dest="workdir",type=str,required=False,help="workdir",default="workdir")
+parser.add_argument("--vmlinux",dest="vmlinux",type=str,required=True,help="Get specific info")
 
 
 
@@ -50,6 +52,7 @@ if (
     and os.path.isfile(args.bzImage)
     and os.path.isfile(args.poc)
     and os.path.isfile(args.rsa)
+    and os.path.isfile(args.vmlinux)
 ):
     pass
 else:
@@ -76,6 +79,7 @@ CapabilityStr="[Primitive]"
 STOP="Rebooting in"
 Cmp_str="KDFSAN: new cmp addr find"
 workdir=os.path.abspath(args.workdir)
+vmlinux=os.path.abspath(args.vmlinux)
 
 if not os.path.exists(workdir):
     os.makedirs(workdir)
@@ -86,11 +90,20 @@ capabilitys=[]
 seperator = "==============================================================="
 
 def get_total_report(name,vm):
+    location=name.split(" ")[-2]
+    if location.startswith("0x"):
+        pass
+    else:
+        log.info(f"\033[31mFormat Error {name}\033[0m")
+        return
+    cmd=["addr2line","-p","-f","-e",vmlinux,"-a",location]
+    result = subprocess.run(cmd,capture_output=True,check=True,text=True)
+    result=result.stdout.strip()
     filename=os.path.join(workdir,str(hash(name)))
     file=os.path.abspath(filename)
     if os.path.exists(file):
         return
-    context=[seperator,name]
+    context=[seperator,name,result]
     while 1:
         try:
             line=vm.recvline(timeout=10)
