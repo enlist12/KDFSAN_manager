@@ -39,6 +39,7 @@ parser.add_argument("-n","--num",type=int,dest="num",required=False,help="num",d
 parser.add_argument("-t","--time",dest="time",type=int,required=False,help="time",default=60)
 parser.add_argument("--batch",dest="batch",type=int,required=False,help="batch",default=5)
 parser.add_argument("--cmp",dest="cmp",action="store_true",help="Enable cmp shift")
+parser.add_argument("--workdir",dest="workdir",type=str,required=False,help="workdir",default="workdir")
 
 
 
@@ -74,10 +75,41 @@ shared_device="-device ivshmem-plain,memdev=ivshmem  "
 CapabilityStr="[Primitive]"
 STOP="Rebooting in"
 Cmp_str="KDFSAN: new cmp addr find"
+workdir=os.path.abspath(args.workdir)
+
+if not os.path.exists(workdir):
+    os.makedirs(workdir)
 
 Cmp_addr_list=[]
-sum_report=[]
-rank=0
+capabilitys=[]
+
+seperator = "==============================================================="
+
+def get_total_report(name,vm):
+    filename=os.path.join(workdir,str(hash(name)))
+    file=os.path.abspath(filename)
+    if os.path.exists(file):
+        return
+    context=[seperator,name]
+    while 1:
+        try:
+            line=vm.recvline(timeout=10)
+        except Exception as e:
+            log.info("Nothing to Recive!!!")
+            break
+        line=line.decode().strip()
+        if "] " in line:
+            index=line.find("] ")
+            line=line[index+2:]
+        context.append(line)
+        if line==seperator:
+            break
+    with open(file,"w") as f:
+        for line in context:
+            f.write(line+"\n")
+    return
+            
+    
 
 SHM_SIZE = 1 * 1024 * 1024
 
@@ -93,11 +125,10 @@ def Init_shared_mem(filename:str):
         shm.close()
 
 def get_capability_report(num:int):
-    report=[]
     share_file=f"/dev/shm/ivshmem{num}"
-    global rank
-    global sum_report
+    global capabilitys
     global lock
+    global Cmp_addr_list
     port=unused_tcp_port()
     cmdline=f'-net user,host=10.0.2.10,hostfwd=tcp:127.0.0.1:{port}-:22 '
     qemu=qemu_cmd+cmdline
@@ -130,7 +161,6 @@ def get_capability_report(num:int):
     find_capability=False
     total_time=args.time
     start=time.time()
-    capability=[]
     last_time=time.time()
     while True:
         try:
@@ -144,49 +174,40 @@ def get_capability_report(num:int):
             index=line.find("] ")
             line=line[index+2:]
         #print(line)
-        report.append(line)
         if CapabilityStr in line and not find_capability:
             log.info(f"\033[31mVM-{num} Find Capability Report\033[0m")
             find_capability=True
-            report=report[-1:]
-            capability.append(line)
-            start=time.time()
+            if line not in capabilitys:
+                capabilitys.append(line)
+                get_total_report(line,vm)
         if Cmp_str in line:
             index1=line.find("0x")
             addr=int(line[index1:],16)
             if addr not in Cmp_addr_list:
                 Cmp_addr_list.append(addr)
                 log.info(f"\033[31mVM-{num} Find New Cmp Addr {hex(addr)}\033[0m")
+                get_total_report(line,vm)
         if STOP in line:
             log.info(f"VM-{num} Rebooting")
             break 
-        if CapabilityStr in line and line not in capability:
-            capability.append(line)
+        if CapabilityStr in line and line not in capabilitys:
+            capabilitys.append(line)
             last_time=time.time()
+            get_total_report(line,vm)
         if time.time()-last_time>total_time:
             log.info(f"VM-{num} No Capability Report")
             break
         if find_capability and time.time()-start>=180:
-            log.info(f"VM-{num} We have get {len(capability)} Capability Report")
+            log.info(f"VM-{num} Close")
             break
     vm.close()
-    if find_capability:
-        with lock:
-            for title in capability:
-                if title not in sum_report:
-                    sum_report.append(title)
-            with open(f"VM-{rank}","w") as f:
-                for line in report:
-                    f.write(line+"\n")
-            rank+=1 
-            return
             
 
 thread=[]
 
 is_update=0
 
-kinds=len(sum_report)
+kinds=len(capabilitys)
 
 batch=args.batch
 
@@ -196,8 +217,8 @@ while 1:
         thread[j].start()
     for j in range(args.num):
         thread[j].join()
-    is_update=len(sum_report)-kinds
-    kinds=len(sum_report)
+    is_update=len(capabilitys)-kinds
+    kinds=len(capabilitys)
     log.info(f"\033[31mUpdate {is_update} Capability Report\033[0m")  
     if not is_update:
         batch+=1
@@ -209,13 +230,9 @@ while 1:
     is_update=0
     thread.clear()
 
-num=len(sum_report)
+num=len(capabilitys)
 
 log.info(f"\033[31mCollect Capability Report {num} kinds\033[0m")
-
-with open("title.txt","w") as f:
-    for line in sum_report:
-        f.write(line+"\n")
 
 
 
